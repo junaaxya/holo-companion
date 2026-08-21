@@ -1,0 +1,28 @@
+# Python environments and bytecode
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Machine-local runtime data
+.cache/
+models/
+recordings/
+
+# Test and tooling output
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.omo/
+.codegraph/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
