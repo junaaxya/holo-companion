@@ -114,11 +114,11 @@ The user can talk normally without a push-to-talk button, and ordinary mid-sente
 
 ## Phase 3 — STT
 
-Status: **NEXT**
+Status: **COMPLETE**
 
 ### Goal
 
-Accurate Indonesian + English-code-switch transcription with acceptable latency.
+Accurate Indonesian + English-code-switch transcription with acceptable latency. The current CPU baseline is functional, not final latency tuning.
 
 ### Initial candidate
 
@@ -160,7 +160,7 @@ Create roughly 20–30 real recordings including:
 
 ### Quality gate
 
-Conversational transcription is reliably understandable and does not frequently corrupt key technical terms.
+Conversational transcription is reliably understandable and does not frequently corrupt key technical terms. Verified against six manually checked recordings using `large-v3-turbo` on CPU INT8: exact match 1.0, WER 0.0, CER 0.0, with 48 s audio processed in 56.84 s (RTF 1.18). This is an acceptable functional baseline, not the final latency target.
 
 Do not use the LLM to hide a bad STT system.
 
@@ -168,7 +168,7 @@ Do not use the LLM to hide a bad STT system.
 
 ## Phase 4 — Streaming LLM
 
-Status: **BLOCKED BY PHASE 3**
+Status: **NEXT**
 
 ### Goal
 
