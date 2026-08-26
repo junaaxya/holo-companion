@@ -2,7 +2,6 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
-from dataclasses import asdict
 from enum import StrEnum, unique
 from pathlib import Path
 from typing import Final, TextIO, assert_never
@@ -12,11 +11,13 @@ from holo_companion.audio.capture import (
     SoundDeviceBackend,
     SoundFileWaveWriter,
     WaveWriter,
-    enumerate_devices,
-    record_wav,
 )
-from holo_companion.audio.types import AudioCliError, CaptureRequest, DeviceInfo, Seconds
-from holo_companion.vad.diagnostics import VadProviderFactory, vad_test_payload as build_vad_test_payload
+from holo_companion.audio.types import AudioCliError, Seconds
+from holo_companion.cli_commands import devices_payload, record_payload, stt_benchmark_payload, stt_wav_payload, vad_test_payload
+from holo_companion.cli_support import add_stt_flags
+from holo_companion.stt.base import SttError
+from holo_companion.stt.payloads import provider_from_config
+from holo_companion.vad.diagnostics import VadProviderFactory
 from holo_companion.vad.silero import create_silero_vad_provider
 
 PROGRAM_NAME: Final = "holo_companion"
@@ -33,6 +34,8 @@ class Command(StrEnum):
     DEVICES = "devices"
     RECORD = "record"
     VAD_TEST = "vad-test"
+    STT_WAV = "stt-wav"
+    STT_BENCHMARK = "stt-benchmark"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -43,6 +46,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         stdout=sys.stdout,
         stderr=sys.stderr,
         vad_provider_factory=create_silero_vad_provider,
+        stt_provider_factory=provider_from_config,
     )
 
 
@@ -53,6 +57,7 @@ def run_cli(
     stdout: TextIO,
     stderr: TextIO,
     vad_provider_factory: VadProviderFactory = create_silero_vad_provider,
+    stt_provider_factory=provider_from_config,
 ) -> int:
     parser = build_parser()
     try:
@@ -64,13 +69,17 @@ def run_cli(
             case Command.RECORD:
                 payload = record_payload(args, backend, writer)
             case Command.VAD_TEST:
-                payload = vad_test_payload(args, backend, vad_provider_factory)
+                payload = vad_test_payload(args, backend, vad_provider_factory, stt_provider_factory)
+            case Command.STT_WAV:
+                payload = stt_wav_payload(args, stt_provider_factory)
+            case Command.STT_BENCHMARK:
+                payload = stt_benchmark_payload(args, stt_provider_factory)
             case None:
                 parser.print_help(stdout)
                 return 0
             case unreachable:
                 assert_never(unreachable)
-    except AudioCliError as error:
+    except (AudioCliError, SttError) as error:
         print(f"error: {error}", file=stderr)
         return 2
     json.dump(payload, stdout, indent=2, sort_keys=True)
@@ -94,6 +103,14 @@ def build_parser() -> argparse.ArgumentParser:
     vad_parser.add_argument("--min-speech-ms", default=DEFAULT_MIN_SPEECH_MS, type=parse_positive_milliseconds)
     vad_parser.add_argument("--min-silence-ms", default=DEFAULT_MIN_SILENCE_MS, type=parse_positive_milliseconds)
     vad_parser.add_argument("--speech-pad-ms", default=DEFAULT_SPEECH_PAD_MS, type=parse_nonnegative_milliseconds)
+    vad_parser.add_argument("--transcribe", action="store_true")
+    add_stt_flags(vad_parser, default_language="id")
+    stt_wav_parser = subcommands.add_parser("stt-wav", help="Transcribe one or more canonical mono 16 kHz WAV files")
+    stt_wav_parser.add_argument("--input", action="append", required=True, type=Path)
+    add_stt_flags(stt_wav_parser, default_language="id")
+    benchmark_parser = subcommands.add_parser("stt-benchmark", help="Run a manifest-based STT benchmark")
+    benchmark_parser.add_argument("--manifest", required=True, type=Path)
+    add_stt_flags(benchmark_parser, default_language=None)
     return parser
 
 
@@ -104,48 +121,6 @@ def parse_command(command: str | None) -> Command | None:
         return Command(command)
     except ValueError as error:
         raise AudioCliError(f"unknown command: {command}") from error
-
-
-def devices_payload(backend: AudioBackend) -> dict[str, str | list[dict[str, int | float | str]] | dict[str, int | float | str]]:
-    devices, defaults = enumerate_devices(backend)
-    return {
-        "input_device_request": "auto",
-        "input_device_auto_resolution": device_payload(defaults.input_selection.resolved),
-        "output_device_request": "auto",
-        "output_device_auto_resolution": device_payload(defaults.output_selection.resolved),
-        "devices": [device_payload(device) for device in devices],
-    }
-
-
-def record_payload(
-    args: argparse.Namespace,
-    backend: AudioBackend,
-    writer: WaveWriter,
-) -> dict[str, str | dict[str, int | float | str | bool]]:
-    input_device = parse_input_device(args.input_device)
-    output_path = parse_output_path(args.output)
-    request = CaptureRequest(
-        seconds=args.seconds,
-        output_path=output_path,
-        requested_input_device=input_device,
-        overwrite=bool(args.overwrite),
-    )
-    result = record_wav(request, backend, writer)
-    return {
-        "requested_input_device": result.requested_input_device,
-        "resolved_input_device": device_payload(result.resolved_input_device),
-        "format": asdict(result.format),
-        "output_path": str(result.output_path),
-        "diagnostics": asdict(result.diagnostics),
-    }
-
-
-def vad_test_payload(
-    args: argparse.Namespace,
-    backend: AudioBackend,
-    vad_provider_factory: VadProviderFactory,
-) -> dict[str, str | int | float | list[dict[str, str | int | float]] | dict[str, str | int | float | None]]:
-    return build_vad_test_payload(args, backend, vad_provider_factory)
 
 
 def parse_seconds(raw_seconds: str) -> Seconds:
@@ -186,33 +161,6 @@ def parse_nonnegative_milliseconds(raw_milliseconds: str) -> int:
     if milliseconds < 0:
         raise argparse.ArgumentTypeError("milliseconds must be at least 0")
     return milliseconds
-
-
-def parse_input_device(input_device: str) -> str:
-    normalized = input_device.strip()
-    if normalized == "":
-        raise AudioCliError("--input-device must be 'auto' or a device-name query")
-    if normalized.isdecimal():
-        raise AudioCliError("--input-device accepts a device-name query, not a numeric device id")
-    return normalized
-
-
-def parse_output_path(path: Path) -> Path:
-    if path.exists() and path.is_dir():
-        raise AudioCliError(f"--output must be a WAV file path, not a directory: {path}")
-    if path.suffix.lower() != ".wav":
-        raise AudioCliError("--output must end with .wav")
-    return path
-
-
-def device_payload(device: DeviceInfo) -> dict[str, int | float | str]:
-    return {
-        "index": int(device.index),
-        "name": device.name,
-        "max_input_channels": device.max_input_channels,
-        "max_output_channels": device.max_output_channels,
-        "default_samplerate": device.default_samplerate,
-    }
 
 
 class CliArgumentParser(argparse.ArgumentParser):

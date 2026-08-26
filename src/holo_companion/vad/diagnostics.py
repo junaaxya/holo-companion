@@ -7,6 +7,9 @@ from typing import Callable, assert_never
 
 from holo_companion.audio.capture import AudioBackend, resolve_input_device
 from holo_companion.audio.types import CAPTURE_CHANNELS, CAPTURE_DTYPE, CAPTURE_FRAME_MS, CAPTURE_FRAME_SAMPLES, CAPTURE_SAMPLE_RATE, AudioCliError
+from holo_companion.cli_support import parse_stt_config
+from holo_companion.stt.collector import UtteranceCollector
+from holo_companion.stt.payloads import JsonObject, SttProviderFactory, provider_from_config, transcript_payload
 from holo_companion.vad.base import PublicSpeechEvent, SpeechEnded, SpeechStarted, TurnDetector, VadPolicy, VadProvider
 
 VadProviderFactory = Callable[[VadPolicy], VadProvider]
@@ -16,7 +19,8 @@ def vad_test_payload(
     args: Namespace,
     backend: AudioBackend,
     vad_provider_factory: VadProviderFactory,
-) -> dict[str, str | int | float | list[dict[str, str | int | float]] | dict[str, str | int | float | None]]:
+    stt_provider_factory: SttProviderFactory = provider_from_config,
+) -> JsonObject:
     input_device = _parse_input_device(args.input_device)
     policy = VadPolicy(
         min_speech_ms=args.min_speech_ms,
@@ -28,8 +32,11 @@ def vad_test_payload(
     backend.check_input_settings(selection.resolved.index, samplerate=int(CAPTURE_SAMPLE_RATE), channels=CAPTURE_CHANNELS, dtype=CAPTURE_DTYPE)
     requested_frames = math.ceil(float(args.seconds) * int(CAPTURE_SAMPLE_RATE) / CAPTURE_FRAME_SAMPLES)
     provider = vad_provider_factory(policy)
+    stt_provider = stt_provider_factory(parse_stt_config(args)) if bool(getattr(args, "transcribe", False)) else None
+    collector = UtteranceCollector(history_frames=math.ceil(policy.min_speech_ms / CAPTURE_FRAME_MS) + 2) if stt_provider is not None else None
     detector = TurnDetector(policy)
     events: list[dict[str, str | int | float]] = []
+    transcripts: list[JsonObject] = []
     process_times_ms: list[float] = []
     try:
         stream = backend.frame_stream(int(CAPTURE_SAMPLE_RATE), CAPTURE_CHANNELS, CAPTURE_DTYPE, selection.resolved.index, CAPTURE_FRAME_SAMPLES)
@@ -39,13 +46,18 @@ def vad_test_payload(
                 process_started_ns = perf_counter_ns()
                 speech_probability = provider.process(frame)
                 process_times_ms.append((perf_counter_ns() - process_started_ns) / 1_000_000)
-                events.extend(speech_event_payload(event) for event in detector.process(frame, speech_probability))
+                frame_events = list(detector.process(frame, speech_probability))
+                events.extend(speech_event_payload(event) for event in frame_events)
+                if collector is not None and stt_provider is not None:
+                    utterance = collector.process(frame, frame_events)
+                    if utterance is not None:
+                        transcripts.append(transcript_payload(stt_provider.transcribe(utterance, language_hint=args.language)))
     except StopIteration as error:
         raise AudioCliError("audio frame stream ended before requested duration") from error
     finally:
         provider.reset()
     diagnostics = detector.diagnostics
-    return {
+    payload = {
         "requested_input_device": selection.requested,
         "resolved_input_device": {
             "index": int(selection.resolved.index),
@@ -72,6 +84,9 @@ def vad_test_payload(
             "queue_overrun": False,
         },
     }
+    if stt_provider is not None:
+        payload["transcripts"] = transcripts
+    return payload
 
 
 def speech_event_payload(event: PublicSpeechEvent) -> dict[str, str | int | float]:
