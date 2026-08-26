@@ -87,7 +87,7 @@ A repeatable recording path produces clean speech that sounds correct to the use
 
 ## Phase 2 — VAD / turn detection
 
-Status: **NEXT**
+Status: **COMPLETE**
 
 ### Goal
 
@@ -99,22 +99,22 @@ Silero VAD.
 
 ### Tasks
 
-- [ ] Add provider interface.
-- [ ] Feed microphone frames continuously.
-- [ ] Emit `SpeechStarted` / `SpeechEnded`.
-- [ ] Tune minimum speech/silence parameters.
-- [ ] Test normal speech, pauses, fan noise, and false starts.
-- [ ] Measure end-of-speech detection latency.
+- [x] Add provider interface.
+- [x] Feed microphone frames continuously.
+- [x] Emit `SpeechStarted` / `SpeechEnded`.
+- [x] Tune minimum speech/silence parameters.
+- [x] Test normal speech, pauses, fan noise, and false starts.
+- [x] Measure end-of-speech detection latency.
 
 ### Quality gate
 
-The user can talk normally without a push-to-talk button, and ordinary mid-sentence pauses do not constantly cut the utterance.
+The user can talk normally without a push-to-talk button, and ordinary mid-sentence pauses do not constantly cut the utterance. Verified on the user's analog headset with threshold 0.6, minimum speech 500 ms, and minimum silence 700 ms: two intended turns were detected, four short noise/transient candidates were rejected, the mid-sentence pause stayed within one turn, no queue overrun occurred, and measured end-of-speech latency was 704 ms.
 
 ---
 
 ## Phase 3 — STT
 
-Status: **BLOCKED BY PHASE 2**
+Status: **NEXT**
 
 ### Goal
 
