@@ -2,6 +2,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, NewType
 
+import numpy as np
+from numpy.typing import NDArray
+
 DeviceIndex = NewType("DeviceIndex", int)
 Frames = NewType("Frames", int)
 SampleRateHz = NewType("SampleRateHz", int)
@@ -10,6 +13,8 @@ Seconds = NewType("Seconds", float)
 CAPTURE_CHANNELS: Final = 1
 CAPTURE_DTYPE: Final = "float32"
 CAPTURE_SAMPLE_RATE: Final = SampleRateHz(16_000)
+CAPTURE_FRAME_SAMPLES: Final = 512
+CAPTURE_FRAME_MS: Final = CAPTURE_FRAME_SAMPLES / int(CAPTURE_SAMPLE_RATE) * 1000
 LOW_VOLUME_PEAK_THRESHOLD: Final = 0.02
 WAV_FORMAT: Final = "WAV"
 WAV_SUBTYPE: Final = "PCM_16"
@@ -59,6 +64,13 @@ class CaptureFormat:
     dtype: str = CAPTURE_DTYPE
     wav_format: str = WAV_FORMAT
     wav_subtype: str = WAV_SUBTYPE
+
+
+@dataclass(frozen=True, slots=True)
+class AudioFrame:
+    samples: NDArray[np.float32]
+    frame_index: int
+    captured_at_ns: int = 0
 
 
 @dataclass(frozen=True, slots=True)

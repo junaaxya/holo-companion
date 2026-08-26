@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Literal, Protocol, assert_never
 
@@ -15,6 +15,7 @@ from holo_companion.audio.types import (
     WAV_FORMAT,
     WAV_SUBTYPE,
     AudioCliError,
+    AudioFrame,
     CaptureFormat,
     CaptureRequest,
     CaptureResult,
@@ -24,6 +25,7 @@ from holo_companion.audio.types import (
     DeviceSelection,
     Frames,
 )
+from holo_companion.audio.stream import sounddevice_frame_stream
 
 
 class AudioBackend(Protocol):
@@ -45,6 +47,15 @@ class AudioBackend(Protocol):
         dtype: str,
         device: DeviceIndex,
     ) -> NDArray[np.float32]: ...
+
+    def frame_stream(
+        self,
+        samplerate: int,
+        channels: int,
+        dtype: str,
+        device: DeviceIndex,
+        blocksize: int,
+    ) -> Iterator[AudioFrame]: ...
 
 
 class WaveWriter(Protocol):
@@ -106,6 +117,16 @@ class SoundDeviceBackend:
             )
         except (sounddevice.PortAudioError, ValueError) as error:
             raise AudioCliError("audio capture failed") from error
+
+    def frame_stream(
+        self,
+        samplerate: int,
+        channels: int,
+        dtype: str,
+        device: DeviceIndex,
+        blocksize: int,
+    ) -> Iterator[AudioFrame]:
+        yield from sounddevice_frame_stream(samplerate=samplerate, channels=channels, dtype=dtype, device=device, blocksize=blocksize)
 
 
 class SoundFileWaveWriter:

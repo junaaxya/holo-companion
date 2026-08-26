@@ -1,10 +1,11 @@
 from dataclasses import dataclass, field
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
 
-from holo_companion.audio.types import AudioCliError, DeviceIndex, DeviceInfo, Frames
+from holo_companion.audio.types import AudioCliError, AudioFrame, DeviceIndex, DeviceInfo, Frames
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,15 @@ class RecordCall:
     device: DeviceIndex
 
 
+@dataclass(frozen=True, slots=True)
+class StreamCall:
+    samplerate: int
+    channels: int
+    dtype: str
+    device: DeviceIndex
+    blocksize: int
+
+
 @dataclass(slots=True)  # noqa: MUTABLE_OK
 class FakeAudioBackend:
     devices: list[DeviceInfo]
@@ -33,6 +43,8 @@ class FakeAudioBackend:
     incompatible: bool = False
     check_calls: list[CheckCall] = field(default_factory=list)
     record_calls: list[RecordCall] = field(default_factory=list)
+    stream_calls: list[StreamCall] = field(default_factory=list)
+    stream_frames: list[AudioFrame] = field(default_factory=list)
 
     def default_input_device(self) -> DeviceInfo:
         matches = [device for device in self.devices if device.index == self.default_input]
@@ -81,6 +93,17 @@ class FakeAudioBackend:
             RecordCall(frames=frames, samplerate=samplerate, channels=channels, dtype=dtype, device=device),
         )
         return self.samples
+
+    def frame_stream(
+        self,
+        samplerate: int,
+        channels: int,
+        dtype: str,
+        device: DeviceIndex,
+        blocksize: int,
+    ) -> Iterator[AudioFrame]:
+        self.stream_calls.append(StreamCall(samplerate=samplerate, channels=channels, dtype=dtype, device=device, blocksize=blocksize))
+        yield from self.stream_frames
 
 
 @dataclass(slots=True)  # noqa: MUTABLE_OK

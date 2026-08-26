@@ -130,13 +130,15 @@ def test_record_command_rejects_invalid_duration_before_capture(tmp_path: Path) 
     # Given
     stderr = io.StringIO()
 
-    # When / Then
-    with pytest.raises(SystemExit) as exit_info:
-        run_cli(
-            ["record", "--seconds", "0", "--output", str(tmp_path / "mic-test.wav")],
-            fake_backend(),
-            FakeWaveWriter(),
-            io.StringIO(),
-            stderr,
-        )
-    assert exit_info.value.code == 2
+    # When
+    code = run_cli(
+        ["record", "--seconds", "0", "--output", str(tmp_path / "mic-test.wav")],
+        fake_backend(),
+        FakeWaveWriter(),
+        io.StringIO(),
+        stderr,
+    )
+
+    # Then
+    assert code == 2
+    assert "--seconds must be at least 0.1" in stderr.getvalue()
