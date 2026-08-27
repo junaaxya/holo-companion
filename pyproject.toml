@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "faster-whisper>=1.2.1",
+    "httpx[http2]>=0.28.1",
     "numpy>=2.4.6",
     "onnxruntime>=1.16.1",
     "silero-vad==6.2.0",
@@ -12,6 +13,9 @@ dependencies = [
     "torch>=1.12.0",
     "torchaudio>=0.12.0",
 ]
+
+[project.scripts]
+llm-test = "holo_companion.llm.cli:main"
 
 [build-system]
 requires = ["hatchling"]
