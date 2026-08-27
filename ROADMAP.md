@@ -168,7 +168,7 @@ Do not use the LLM to hide a bad STT system.
 
 ## Phase 4 — Streaming LLM
 
-Status: **NEXT**
+Status: **COMPLETE**
 
 ### Goal
 
@@ -176,13 +176,13 @@ Produce conversational responses quickly without coupling to one model vendor.
 
 ### Tasks
 
-- [ ] Define `LLMProvider`.
-- [ ] Implement one OpenAI-compatible streaming adapter.
-- [ ] Add minimal persona.
-- [ ] Stream tokens/chunks.
-- [ ] Measure time-to-first-token.
-- [ ] Keep persona concise.
-- [ ] Avoid long-term memory.
+- [x] Define `LLMProvider`.
+- [x] Implement one OpenAI-compatible streaming adapter.
+- [x] Add minimal persona.
+- [x] Stream tokens/chunks.
+- [x] Measure time-to-first-token.
+- [x] Keep persona concise.
+- [x] Avoid long-term memory.
 
 ### Initial persona direction
 
@@ -192,13 +192,13 @@ Conversational Indonesian, occasional natural English, not customer-service-like
 
 ### Quality gate
 
-Text-only multi-turn responses feel conversational and begin streaming quickly.
+Text-only multi-turn responses feel conversational and begin streaming quickly. Gemini development-provider acceptance completed with clean async shutdown: HTTP headers at 3.727 s, first SSE event at 3.727 s, first visible text at 3.727 s, and total completion at 3.728 s. This confirms no adapter-side buffering; Gemini pre-response latency remains a provider performance concern for later tuning.
 
 ---
 
 ## Phase 5 — TTS bake-in
 
-Status: **BLOCKED BY PHASE 4**
+Status: **NEXT**
 
 ### Goal
 
