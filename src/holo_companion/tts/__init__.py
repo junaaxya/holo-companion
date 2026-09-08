@@ -1,0 +1,41 @@
+from holo_companion.tts.base import (
+    StyleHints,
+    SynthesisMetrics,
+    SynthesisRequest,
+    SynthesisResult,
+    SynthesisStatus,
+    TTSAudioChunk,
+    TTSProvider,
+    TtsAudioFormat,
+    TtsError,
+    TtsErrorKind,
+    TtsProviderDiagnostic,
+    TtsStreamEvent,
+    aggregate_audio_duration_seconds,
+    real_time_factor,
+)
+from holo_companion.tts.config import load_elevenlabs_tts_config
+from holo_companion.tts.elevenlabs import ELEVENLABS_V3_CONVERSATIONAL_MODEL, ElevenLabsConfig, ElevenLabsTTSProvider, EmotionMapper, provider_from_config
+
+__all__ = [
+    "StyleHints",
+    "SynthesisMetrics",
+    "SynthesisRequest",
+    "SynthesisResult",
+    "SynthesisStatus",
+    "TTSAudioChunk",
+    "TTSProvider",
+    "TtsAudioFormat",
+    "TtsError",
+    "TtsErrorKind",
+    "TtsProviderDiagnostic",
+    "TtsStreamEvent",
+    "aggregate_audio_duration_seconds",
+    "ELEVENLABS_V3_CONVERSATIONAL_MODEL",
+    "ElevenLabsConfig",
+    "ElevenLabsTTSProvider",
+    "EmotionMapper",
+    "load_elevenlabs_tts_config",
+    "provider_from_config",
+    "real_time_factor",
+]

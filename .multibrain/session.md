@@ -9,3 +9,4 @@ Use this file as the master index that points to sub-index files.
 - `vad` — Phase 2 CPU-only Silero VAD frame stream, provider boundary, turn detection, and diagnostics CLI. Last updated: 2026-08-25 WIB -> .multibrain/indexes/vad.md
 - `stt` — Phase 3 Faster-Whisper CPU INT8 baseline, VAD collector, WAV/benchmark CLIs, and model-free tests. Last updated: 2026-08-26 WIB -> .multibrain/indexes/stt.md
 - `llm` — Phase 4 OpenAI-compatible `httpx` streaming LLM provider, typed context/cancellation/metrics, and `llm-test` NDJSON CLI. Last updated: 2026-08-27 WIB -> .multibrain/indexes/llm.md
+- `tts` — Phase 5 COMPLETE: human-accepted ElevenLabs Holo Soft v1 expressive streaming; acceptance configuration and concerned benchmark recorded. Phase 6 not started. Last updated: 2026-09-08 WIB -> .multibrain/indexes/tts.md

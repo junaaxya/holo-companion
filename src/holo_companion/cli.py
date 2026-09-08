@@ -1,6 +1,8 @@
 import argparse
+import anyio
 import json
 import sys
+import time
 from collections.abc import Sequence
 from enum import StrEnum, unique
 from pathlib import Path
@@ -17,6 +19,10 @@ from holo_companion.cli_commands import devices_payload, record_payload, stt_ben
 from holo_companion.cli_support import add_stt_flags
 from holo_companion.stt.base import SttError
 from holo_companion.stt.payloads import provider_from_config
+from holo_companion.tts.base import StyleHints, SynthesisRequest, TtsError, TtsErrorKind
+from holo_companion.tts.cli import TtsConfigLoader, TtsProviderFactory, format_tts_smoke_result, run_tts_smoke
+from holo_companion.tts.config import load_elevenlabs_tts_config
+from holo_companion.tts.elevenlabs import provider_from_config as elevenlabs_provider_from_config
 from holo_companion.vad.diagnostics import VadProviderFactory
 from holo_companion.vad.silero import create_silero_vad_provider
 
@@ -36,6 +42,7 @@ class Command(StrEnum):
     VAD_TEST = "vad-test"
     STT_WAV = "stt-wav"
     STT_BENCHMARK = "stt-benchmark"
+    TTS_SMOKE = "tts-smoke"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -47,38 +54,71 @@ def main(argv: Sequence[str] | None = None) -> int:
         stderr=sys.stderr,
         vad_provider_factory=create_silero_vad_provider,
         stt_provider_factory=provider_from_config,
+        tts_config_loader=load_elevenlabs_tts_config,
+        tts_provider_factory=lambda config: elevenlabs_provider_from_config(config, time.monotonic),
     )
 
 
 def run_cli(
     argv: Sequence[str] | None,
-    backend: AudioBackend,
-    writer: WaveWriter,
-    stdout: TextIO,
-    stderr: TextIO,
+    backend: AudioBackend | None = None,
+    writer: WaveWriter | None = None,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
     vad_provider_factory: VadProviderFactory = create_silero_vad_provider,
     stt_provider_factory=provider_from_config,
+    tts_config_loader: TtsConfigLoader = load_elevenlabs_tts_config,
+    tts_provider_factory: TtsProviderFactory = lambda config: elevenlabs_provider_from_config(config, time.monotonic),
 ) -> int:
+    resolved_backend = SoundDeviceBackend() if backend is None else backend
+    resolved_writer = SoundFileWaveWriter() if writer is None else writer
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
         command = parse_command(args.command)
         match command:
             case Command.DEVICES:
-                payload = devices_payload(backend)
+                payload = devices_payload(resolved_backend)
             case Command.RECORD:
-                payload = record_payload(args, backend, writer)
+                payload = record_payload(args, resolved_backend, resolved_writer)
             case Command.VAD_TEST:
-                payload = vad_test_payload(args, backend, vad_provider_factory, stt_provider_factory)
+                payload = vad_test_payload(args, resolved_backend, vad_provider_factory, stt_provider_factory)
             case Command.STT_WAV:
                 payload = stt_wav_payload(args, stt_provider_factory)
             case Command.STT_BENCHMARK:
                 payload = stt_benchmark_payload(args, stt_provider_factory)
+            case Command.TTS_SMOKE:
+                request = SynthesisRequest(
+                    text=args.text,
+                    style=StyleHints(emotion=args.emotion, intensity=args.intensity) if args.emotion is not None or args.intensity is not None else None,
+                )
+                result = anyio.run(run_tts_smoke, request, args.output, tts_config_loader, tts_provider_factory, resolved_writer)
+                stdout.write(format_tts_smoke_result(result))
+                return 0
             case None:
                 parser.print_help(stdout)
                 return 0
             case unreachable:
                 assert_never(unreachable)
+    except TtsError as error:
+        if error.diagnostic is None:
+            message = "provider: TTS smoke synthesis failed" if error.kind is TtsErrorKind.PROVIDER else str(error)
+            print(f"error: {message}", file=stderr)
+            return 2
+        diagnostic = error.diagnostic
+        print(f"error: {error.kind}: TTS smoke synthesis failed", file=stderr)
+        for label, value in (
+            ("stage", diagnostic.stage),
+            ("status_code", diagnostic.status_code),
+            ("close_code", diagnostic.close_code),
+            ("error", diagnostic.error),
+            ("error_class", diagnostic.error_class),
+            ("message", diagnostic.message),
+            ("model", diagnostic.model),
+        ):
+            if value is not None:
+                print(f"{label}: {value}", file=stderr)
+        return 2
     except (AudioCliError, SttError) as error:
         print(f"error: {error}", file=stderr)
         return 2
@@ -111,6 +151,11 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_parser = subcommands.add_parser("stt-benchmark", help="Run a manifest-based STT benchmark")
     benchmark_parser.add_argument("--manifest", required=True, type=Path)
     add_stt_flags(benchmark_parser, default_language=None)
+    tts_parser = subcommands.add_parser("tts-smoke", help="Run one ElevenLabs TTS smoke request and save mono WAV")
+    tts_parser.add_argument("--text", required=True)
+    tts_parser.add_argument("--emotion")
+    tts_parser.add_argument("--intensity", type=parse_tts_intensity)
+    tts_parser.add_argument("--output", required=True, type=Path)
     return parser
 
 
@@ -141,6 +186,16 @@ def parse_threshold(raw_threshold: str) -> float:
     if threshold <= 0 or threshold >= 1:
         raise argparse.ArgumentTypeError("--threshold must be greater than 0 and less than 1")
     return threshold
+
+
+def parse_tts_intensity(raw_intensity: str) -> float:
+    try:
+        intensity = float(raw_intensity)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("--intensity must be a number") from error
+    if not 0.0 <= intensity <= 1.0:
+        raise argparse.ArgumentTypeError("--intensity must be between 0.0 and 1.0")
+    return intensity
 
 
 def parse_positive_milliseconds(raw_milliseconds: str) -> int:

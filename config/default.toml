@@ -3,3 +3,8 @@ provider = "openai_compatible"
 base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
 model = "gemini-3.6-flash"
 timeout_seconds = 30.0
+stability = 0.40
+
+[tts.elevenlabs]
+base_url = "https://api.elevenlabs.io"
+timeout_seconds = 30.0

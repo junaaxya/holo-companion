@@ -12,9 +12,11 @@ dependencies = [
     "soundfile>=0.14.0",
     "torch>=1.12.0",
     "torchaudio>=0.12.0",
+    "websockets>=15.0",
 ]
 
 [project.scripts]
+holo-companion = "holo_companion.cli:main"
 llm-test = "holo_companion.llm.cli:main"
 
 [build-system]

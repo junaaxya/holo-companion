@@ -198,7 +198,7 @@ Text-only multi-turn responses feel conversational and begin streaming quickly. 
 
 ## Phase 5 — TTS bake-in
 
-Status: **NEXT**
+Status: **COMPLETE**
 
 ### Goal
 
@@ -252,11 +252,35 @@ The user performs blind/subjective listening and scores samples.
 
 Chosen provider/voice is pleasant enough that the user prefers listening to it for a longer conversation rather than switching back to text.
 
+Human acceptance passed: the user confirmed successful ElevenLabs real streaming smoke tests, accepted Holo Soft v1's voice identity, accepted both playful and concerned delivery, and accepted the emotional distinction produced by EmotionMapper.
+
+### Accepted development configuration
+
+- Primary provider: ElevenLabs, model `eleven_v3_conversational`.
+- Voice: Holo Soft v1; stability: `0.40`.
+- Indonesian Text-to-Dialogue WebSocket with `language_code=id`.
+- Output: PCM 24 kHz mono, converted to provider-neutral float32 chunks.
+- EmotionMapper: accepted deterministic emotion/intensity rendering.
+- F5-TTS Indonesian V2 remains frozen as a local fallback candidate; its environment and cache are preserved. Its CC-BY-NC-4.0 license limits it to personal/research use, not a commercial foundation.
+
+Representative concerned benchmark reported by the user:
+
+| Metric | Result |
+|---|---:|
+| TTFA | 0.262 s |
+| Total synthesis latency | 0.743 s |
+| Generated audio duration | 3.120 s |
+| RTF | 0.238 |
+| Bytes received | 149760 |
+| Audio chunks | 6 |
+
+This closes Phase 5 only. No Phase 6 implementation or RVC work was started during closeout.
+
 ---
 
 ## Phase 6 — Real-time orchestration + interruption
 
-Status: **BLOCKED BY PHASE 5**
+Status: **NEXT — NOT STARTED**
 
 ### Goal
 
