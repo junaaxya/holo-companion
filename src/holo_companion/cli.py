@@ -16,13 +16,15 @@ from holo_companion.audio.capture import (
 )
 from holo_companion.audio.types import AudioCliError, Seconds
 from holo_companion.cli_commands import devices_payload, record_payload, stt_benchmark_payload, stt_wav_payload, vad_test_payload
-from holo_companion.cli_support import add_stt_flags
+from holo_companion.cli_support import add_stt_flags, parse_stt_config
+from holo_companion.llm.base import LlmError
 from holo_companion.stt.base import SttError
 from holo_companion.stt.payloads import provider_from_config
 from holo_companion.tts.base import StyleHints, SynthesisRequest, TtsError, TtsErrorKind
 from holo_companion.tts.cli import TtsConfigLoader, TtsProviderFactory, format_tts_smoke_result, run_tts_smoke
 from holo_companion.tts.config import load_elevenlabs_tts_config
 from holo_companion.tts.elevenlabs import provider_from_config as elevenlabs_provider_from_config
+from holo_companion.runtime.live_cli import run_talk_cli
 from holo_companion.vad.diagnostics import VadProviderFactory
 from holo_companion.vad.silero import create_silero_vad_provider
 
@@ -43,6 +45,7 @@ class Command(StrEnum):
     STT_WAV = "stt-wav"
     STT_BENCHMARK = "stt-benchmark"
     TTS_SMOKE = "tts-smoke"
+    TALK = "talk"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -95,6 +98,9 @@ def run_cli(
                 result = anyio.run(run_tts_smoke, request, args.output, tts_config_loader, tts_provider_factory, resolved_writer)
                 stdout.write(format_tts_smoke_result(result))
                 return 0
+            case Command.TALK:
+                args.stt_config = parse_stt_config(args)
+                return run_talk_cli(args, resolved_backend, stdout, stderr)
             case None:
                 parser.print_help(stdout)
                 return 0
@@ -119,7 +125,7 @@ def run_cli(
             if value is not None:
                 print(f"{label}: {value}", file=stderr)
         return 2
-    except (AudioCliError, SttError) as error:
+    except (AudioCliError, SttError, LlmError) as error:
         print(f"error: {error}", file=stderr)
         return 2
     json.dump(payload, stdout, indent=2, sort_keys=True)
@@ -156,6 +162,16 @@ def build_parser() -> argparse.ArgumentParser:
     tts_parser.add_argument("--emotion")
     tts_parser.add_argument("--intensity", type=parse_tts_intensity)
     tts_parser.add_argument("--output", required=True, type=Path)
+    talk_parser = subcommands.add_parser("talk", help="Run the controlled live microphone conversation path")
+    talk_parser.add_argument("--input-device", default="auto")
+    talk_parser.add_argument("--threshold", default=DEFAULT_VAD_THRESHOLD, type=parse_threshold)
+    talk_parser.add_argument("--min-speech-ms", default=DEFAULT_MIN_SPEECH_MS, type=parse_positive_milliseconds)
+    talk_parser.add_argument("--min-silence-ms", default=DEFAULT_MIN_SILENCE_MS, type=parse_positive_milliseconds)
+    talk_parser.add_argument("--speech-pad-ms", default=DEFAULT_SPEECH_PAD_MS, type=parse_nonnegative_milliseconds)
+    talk_parser.add_argument("--playback-guard-ms", default=300, type=parse_nonnegative_milliseconds)
+    talk_parser.add_argument("--dump-utterances-dir", type=Path)
+    talk_parser.add_argument("--dump-raw-capture", type=Path)
+    add_stt_flags(talk_parser, default_language="id")
     return parser
 
 
