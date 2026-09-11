@@ -158,7 +158,7 @@ This makes interruption, metrics, debugging, recording/replay tests, and future 
 
 ## 6. Concurrency model
 
-Prefer `asyncio` for orchestration.
+Use AnyIO for orchestration so cancellation, task groups, and test coordination stay explicit.
 
 Conceptual tasks:
 
@@ -181,6 +181,23 @@ Why bounded queues:
 - prevent stale audio/text from being played after interruption.
 
 Provider code that is blocking should be wrapped appropriately rather than blocking the main event loop.
+
+The first Phase 6 slice owns one active turn at a time in a provider-neutral state machine:
+
+```text
+IDLE
+LISTENING
+TRANSCRIBING
+THINKING
+SPEAKING
+INTERRUPTING
+ERROR
+STOPPED
+```
+
+Transitions are explicit and invalid transitions raise typed errors. A new speech-start event invalidates the active turn/generation before cancellation, stops playback, and only then allows replacement work. STT remains synchronous at the provider boundary and is run through a serialized non-abandoning worker thread adapter, so two STT calls cannot overlap and teardown waits for the blocking call to return. This has a known latency ceiling: shutdown or interruption cannot reclaim a CPU-bound STT call until the provider returns.
+
+Playback is currently a tiny async sink protocol only: `write_and_start`, `stop`, and `aclose`. The first playback timestamp is taken after the sink acknowledges write/start admission. It is a proxy for queued playback start, not proof that a physical DAC emitted audio.
 
 ## 7. Turn lifecycle
 
@@ -327,13 +344,14 @@ Instrument timestamps from the beginning.
 At minimum record:
 
 ```text
-speech_started_at
-speech_ended_at
-stt_final_at
-llm_first_token_at
-tts_first_audio_at
-playback_started_at
-turn_completed_at
+speech_end_detected
+stt_start
+stt_complete
+llm_request_start
+first_llm_token
+tts_request_start
+first_tts_audio
+first_playback_audio
 ```
 
 Derived metrics:
@@ -346,6 +364,8 @@ tts_ttfa_ms
 perceived_response_latency_ms
 total_turn_ms
 ```
+
+The runtime clock is injectable and monotonic. Cancelled/error turn metrics are preserved for inspection, with derived speech-end-to-transcript/token/audio/playback values left nullable when a stage never completed.
 
 Optimization decisions should be based on these numbers.
 

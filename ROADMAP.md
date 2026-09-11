@@ -274,13 +274,13 @@ Representative concerned benchmark reported by the user:
 | Bytes received | 149760 |
 | Audio chunks | 6 |
 
-This closes Phase 5 only. No Phase 6 implementation or RVC work was started during closeout.
+This closes Phase 5 only. Its closeout did not start Phase 6 or RVC work; the separate Phase 6 foundation below began afterward.
 
 ---
 
 ## Phase 6 — Real-time orchestration + interruption
 
-Status: **NEXT — NOT STARTED**
+Status: **IN PROGRESS**
 
 ### Goal
 
@@ -289,6 +289,7 @@ Make the interaction feel alive instead of turn-based.
 ### Tasks
 
 - [ ] Implement turn IDs.
+- [x] Add provider-neutral async state machine foundation with monotonic turn/generation ownership and fake-driven interruption/stale-output tests.
 - [ ] Bounded async queues.
 - [ ] Incremental text-to-TTS chunking.
 - [ ] Playback queue.
