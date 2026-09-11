@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from holo_companion.llm.base import CancellationHandle, ChatMessage, GenerationResult, GenerationStatus, LlmConfig, LlmError, LlmErrorKind, TextChunk
-from holo_companion.llm.openai_compatible import OpenAiCompatibleProvider
+from holo_companion.llm.openai_compatible import OpenAiCompatibleProvider, request_debug_payload
 
 
 @dataclass(slots=True)  # noqa: MUTABLE_OK
@@ -42,6 +42,24 @@ def provider_with_response(response: httpx.Response, clock: FakeClock) -> tuple[
     config = LlmConfig(provider="openai_compatible", base_url="https://api.example.test/v1", model="model-a", api_key="secret")
     client = httpx.AsyncClient(base_url=config.base_url, transport=httpx.MockTransport(handler))
     return OpenAiCompatibleProvider(config=config, client=client, monotonic_seconds=clock), requests
+
+
+def test_request_debug_payload_matches_sent_body_without_api_key() -> None:
+    # Given
+    config = LlmConfig(provider="openai_compatible", base_url="http://localhost:20128/v1", model="ag/gpt-4o-mini", api_key="secret-value")
+    request_body = {"model": config.model, "messages": [{"role": "system", "content": "system prompt"}, {"role": "user", "content": "user prompt"}], "stream": True}
+
+    # When
+    payload = request_debug_payload(config, request_body)
+
+    # Then
+    assert payload["base_url"] == "http://localhost:20128/v1"
+    assert payload["model"] == "ag/gpt-4o-mini"
+    assert payload["message_count"] == 2
+    assert payload["message_roles"] == ["system", "user"]
+    assert payload["messages"] == request_body["messages"]
+    assert payload["generation_parameters"] == {"stream": True, "temperature": None, "top_p": None, "max_tokens": None, "max_completion_tokens": None, "stop": None}
+    assert "secret-value" not in repr(payload)
 
 
 @pytest.mark.anyio
@@ -172,6 +190,32 @@ async def test_openai_provider_treats_choice_finish_reason_as_completed_without_
         TextChunk(text="Ha", index=0, elapsed_seconds=0.5999999999999996),
         GenerationResult(text="Ha", status=GenerationStatus.COMPLETED, metrics=events[-1].metrics),
     ]
+
+
+@pytest.mark.anyio
+async def test_openai_provider_accepts_9router_empty_choices_null_finish_and_duplicate_done() -> None:
+    # Given
+    body = [
+        b"data: {\"choices\":[]}\n\n",
+        b"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"Halo\"}}]}\n\n",
+        b"data: {\"choices\":[{\"delta\":{\"content\":\" dunia\"}}]}\n\n",
+        b"data: {\"choices\":[{\"delta\":{\"content\":null},\"finish_reason\":\"stop\"}],\"usage\":{\"total_tokens\":3}}\n\n",
+        b"data: [DONE]\n\n",
+        b"data: [DONE]\n\n",
+    ]
+    provider, _requests = provider_with_response(httpx.Response(200, stream=ChunkStream(body)), FakeClock([1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8]))
+
+    # When
+    events = [event async for event in provider.stream((ChatMessage(role="user", content="Halo"),))]
+
+    # Then
+    assert [event.text for event in events if isinstance(event, TextChunk)] == ["Halo", " dunia"]
+    result = events[-1]
+    assert isinstance(result, GenerationResult)
+    assert result.status is GenerationStatus.COMPLETED
+    assert result.text == "Halo dunia"
+    assert result.metrics.chunk_count == 2
 
 
 @pytest.mark.anyio

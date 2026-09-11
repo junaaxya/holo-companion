@@ -1,8 +1,10 @@
 import json
+import os
 import socket
+import sys
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Final, Protocol, TypeAlias
+from typing import Callable, Final, Protocol, TypeAlias
 
 import httpx
 
@@ -10,7 +12,9 @@ from holo_companion.llm.base import CancellationHandle, ChatMessage, GenerationM
 from holo_companion.llm.payloads import message_payload
 
 CHAT_COMPLETIONS_PATH: Final = "/chat/completions"
+DEBUG_REQUEST_ENV: Final = "LLM_DEBUG_REQUEST"
 FinishReason: TypeAlias = str | int | float | bool | list["FinishReason"] | dict[str, "FinishReason"]
+RequestDebug = Callable[[dict[str, object]], None]
 
 
 class Clock(Protocol):
@@ -28,6 +32,7 @@ class OpenAiCompatibleProvider:
     config: LlmConfig
     client: httpx.AsyncClient
     monotonic_seconds: Clock
+    debug_request: RequestDebug | None = None
 
     async def stream(self, messages: tuple[ChatMessage, ...], cancellation: CancellationHandle | None = None) -> AsyncIterator[LlmStreamEvent]:
         handle = CancellationHandle() if cancellation is None else cancellation
@@ -40,7 +45,10 @@ class OpenAiCompatibleProvider:
         index = 0
         completed = False
         try:
-            async with self.client.stream("POST", CHAT_COMPLETIONS_PATH, json={"model": self.config.model, "messages": [message_payload(message) for message in messages], "stream": True}, headers={"Authorization": f"Bearer {self.config.api_key}"}) as response:
+            request_body = {"model": self.config.model, "messages": [message_payload(message) for message in messages], "stream": True}
+            if self.debug_request is not None:
+                self.debug_request(request_debug_payload(self.config, request_body))
+            async with self.client.stream("POST", CHAT_COMPLETIONS_PATH, json=request_body, headers={"Authorization": f"Bearer {self.config.api_key}"}) as response:
                 http_headers_seconds = self.monotonic_seconds() - start
                 if response.status_code >= 400:
                     raise LlmError(LlmErrorKind.HTTP_STATUS, f"LLM provider returned HTTP {response.status_code}", status_code=response.status_code)
@@ -52,13 +60,15 @@ class OpenAiCompatibleProvider:
                             break
                         if data == "[DONE]":
                             completed = True
-                            break
+                            continue
                         delta = parse_delta_event(data)
+                        if delta is None:
+                            continue
                         completed = delta.finished
                         text = delta.text
                         if text == "":
                             if completed:
-                                break
+                                continue
                             continue
                         now = self.monotonic_seconds()
                         if first_token_seconds is None:
@@ -88,7 +98,25 @@ def create_httpx_client(config: LlmConfig) -> httpx.AsyncClient:
 
 
 def provider_from_config(config: LlmConfig, monotonic_seconds: Clock) -> OpenAiCompatibleProvider:
-    return OpenAiCompatibleProvider(config=config, client=create_httpx_client(config), monotonic_seconds=monotonic_seconds)
+    return OpenAiCompatibleProvider(config=config, client=create_httpx_client(config), monotonic_seconds=monotonic_seconds, debug_request=_debug_request if os.environ.get(DEBUG_REQUEST_ENV) == "1" else None)
+
+
+def request_debug_payload(config: LlmConfig, request_body: dict[str, object]) -> dict[str, object]:
+    messages = request_body["messages"]
+    assert isinstance(messages, list)
+    return {
+        "llm_debug_request": True,
+        "base_url": config.base_url,
+        "model": config.model,
+        "message_count": len(messages),
+        "message_roles": [message["role"] for message in messages],
+        "messages": messages,
+        "generation_parameters": {"stream": request_body["stream"], "temperature": None, "top_p": None, "max_tokens": None, "max_completion_tokens": None, "stop": None},
+    }
+
+
+def _debug_request(payload: dict[str, object]) -> None:
+    print(json.dumps(payload, ensure_ascii=False), file=sys.stderr, flush=True)
 
 
 async def sse_data_events(response: httpx.Response) -> AsyncIterator[str]:
@@ -107,14 +135,18 @@ async def sse_data_events(response: httpx.Response) -> AsyncIterator[str]:
         yield "\n".join(data_lines)
 
 
-def parse_delta_event(raw_data: str) -> DeltaEvent:
+def parse_delta_event(raw_data: str) -> DeltaEvent | None:
     try:
         payload = json.loads(raw_data)
     except json.JSONDecodeError as error:
         raise LlmError(LlmErrorKind.PROTOCOL, "LLM stream emitted invalid JSON") from error
+    if not isinstance(payload, dict):
+        raise LlmError(LlmErrorKind.PROTOCOL, "LLM stream payload must be an object")
     choices = payload.get("choices")
-    if not isinstance(choices, list) or len(choices) == 0:
+    if not isinstance(choices, list):
         raise LlmError(LlmErrorKind.PROTOCOL, "LLM stream payload missing choices")
+    if len(choices) == 0:
+        return None
     first_choice = choices[0]
     if not isinstance(first_choice, dict):
         raise LlmError(LlmErrorKind.PROTOCOL, "LLM stream choice must be an object")
@@ -122,6 +154,8 @@ def parse_delta_event(raw_data: str) -> DeltaEvent:
     if not isinstance(delta, dict):
         raise LlmError(LlmErrorKind.PROTOCOL, "LLM stream delta must be an object")
     content = delta.get("content", "")
+    if content is None:
+        content = ""
     if not isinstance(content, str):
         raise LlmError(LlmErrorKind.PROTOCOL, "LLM stream content must be text")
     finish_reason: FinishReason | None = first_choice.get("finish_reason")

@@ -7,6 +7,8 @@ from holo_companion.llm.base import LlmConfig, LlmError, LlmErrorKind
 
 CONFIG_PATH: Final = Path("config/default.toml")
 API_KEY_ENV: Final = "LLM_API_KEY"
+BASE_URL_ENV: Final = "LLM_BASE_URL"
+MODEL_ENV: Final = "LLM_MODEL"
 
 
 def load_llm_config(config_path: Path = CONFIG_PATH, env: Mapping[str, str] = os.environ) -> LlmConfig:
@@ -19,8 +21,8 @@ def load_llm_config(config_path: Path = CONFIG_PATH, env: Mapping[str, str] = os
         raise LlmError(LlmErrorKind.CONFIG, "config/default.toml must contain [llm]")
     return LlmConfig(
         provider=str(llm_data.get("provider", "")),
-        base_url=str(llm_data.get("base_url", "")),
-        model=str(llm_data.get("model", "")),
+        base_url=env.get(BASE_URL_ENV, str(llm_data.get("base_url", ""))),
+        model=env.get(MODEL_ENV, str(llm_data.get("model", ""))),
         timeout_seconds=float(llm_data.get("timeout_seconds", 30.0)),
         api_key=env.get(API_KEY_ENV, ""),
     )
