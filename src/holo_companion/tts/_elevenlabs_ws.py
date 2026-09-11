@@ -118,9 +118,9 @@ def parse_ws_event(raw_message: str | bytes) -> ElevenLabsWsEvent:
         case {"error": str(error)}:
             return ElevenLabsWsEvent(error="provider_error_frame", error_type=error)
         case {"audio": str(audio)}:
-            return ElevenLabsWsEvent(audio=audio)
+            return ElevenLabsWsEvent(audio=audio, is_final_audio_for_turn=bool(payload.get("is_final_audio_for_turn")), is_final=bool(payload.get("is_final")))
         case {"is_final_audio_for_turn": True}:
-            return ElevenLabsWsEvent(is_final_audio_for_turn=True)
+            return ElevenLabsWsEvent(is_final_audio_for_turn=True, is_final=bool(payload.get("is_final")))
         case {"is_final": True}:
             return ElevenLabsWsEvent(is_final=True)
         case _:

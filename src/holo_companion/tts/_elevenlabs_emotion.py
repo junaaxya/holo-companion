@@ -12,6 +12,8 @@ class EmotionMapper:
     def map_text(self, text: str, style: StyleHints | None) -> MappedVoiceText:
         if style is None or style.emotion is None or style.emotion == "neutral":
             return MappedVoiceText(text=text)
+        if text.startswith("["):
+            return MappedVoiceText(text=text)
         intensity = style.intensity if style.intensity is not None else style.energy
         band = intensity_band(0.5 if intensity is None else intensity)
         match (style.emotion, band):
