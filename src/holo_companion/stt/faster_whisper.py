@@ -1,5 +1,5 @@
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import monotonic
 from typing import Protocol
 
@@ -44,25 +44,20 @@ def load_whisper_model(model_name: str, device: str, compute_type: str, download
     )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class FasterWhisperSttProvider:
     config: SttConfig
     loader: WhisperModelLoader = load_whisper_model
     monotonic_seconds: Clock = monotonic
+    _model: WhisperModelLike | None = field(default=None, init=False, repr=False)
+
+    def preload(self) -> float:
+        start_seconds = self.monotonic_seconds()
+        self._get_model()
+        return self.monotonic_seconds() - start_seconds
 
     def transcribe(self, utterance: Utterance, language_hint: str | None = None) -> Transcript:
-        try:
-            model = self.loader(
-                self.config.model_name,
-                self.config.device,
-                self.config.compute_type,
-                str(self.config.cache_dir),
-                self.config.local_files_only,
-                self.config.cpu_threads,
-                self.config.num_workers,
-            )
-        except (ValueError, RuntimeError, OSError) as error:
-            raise SttError("failed to load Faster-Whisper model") from error
+        model = self._get_model()
         start_seconds = self.monotonic_seconds()
         try:
             language = None if language_hint == "auto" else language_hint
@@ -83,3 +78,19 @@ class FasterWhisperSttProvider:
             compute_type=self.config.compute_type,
             segments=tuple(TranscriptSegment(segment.start, segment.end, segment.text) for segment in segments),
         )
+
+    def _get_model(self) -> WhisperModelLike:
+        try:
+            model = self._model or self.loader(
+                self.config.model_name,
+                self.config.device,
+                self.config.compute_type,
+                str(self.config.cache_dir),
+                self.config.local_files_only,
+                self.config.cpu_threads,
+                self.config.num_workers,
+            )
+            self._model = model
+        except (ValueError, RuntimeError, OSError) as error:
+            raise SttError("failed to load Faster-Whisper model") from error
+        return model

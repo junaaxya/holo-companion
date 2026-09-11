@@ -135,3 +135,41 @@ def test_faster_whisper_maps_auto_language_hint_to_model_detection(tmp_path) -> 
     # Then
     assert model.consumed_at == [20.0]
     assert model.languages == [None]
+
+
+def test_faster_whisper_reuses_loaded_model_across_turns(tmp_path) -> None:
+    # Given
+    model = FakeModel(consumed_at=[], languages=[])
+    loader = FakeLoader(calls=[], model=model)
+    provider = FasterWhisperSttProvider(
+        SttConfig(cache_dir=tmp_path), loader=loader, monotonic_seconds=FakeClock([1.0, 2.0, 3.0, 4.0])
+    )
+    utterance = Utterance.from_samples(np.zeros(512, dtype=np.float32))
+
+    # When
+    provider.transcribe(utterance, language_hint="id")
+    provider.transcribe(utterance, language_hint="id")
+
+    # Then
+    assert len(loader.calls) == 1
+    assert model.languages == ["id", "id"]
+
+
+def test_faster_whisper_preload_separates_model_load_from_first_turn_inference(tmp_path) -> None:
+    # Given
+    model = FakeModel(consumed_at=[], languages=[])
+    loader = FakeLoader(calls=[], model=model)
+    provider = FasterWhisperSttProvider(
+        SttConfig(cache_dir=tmp_path), loader=loader, monotonic_seconds=FakeClock([1.0, 3.0, 5.0, 9.0])
+    )
+    utterance = Utterance.from_samples(np.zeros(512, dtype=np.float32))
+
+    # When
+    load_seconds = provider.preload()
+    transcript = provider.transcribe(utterance, language_hint="id")
+
+    # Then
+    assert load_seconds == pytest.approx(2.0)
+    assert transcript.processing_seconds == pytest.approx(4.0)
+    assert len(loader.calls) == 1
+    assert model.languages == ["id"]

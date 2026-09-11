@@ -96,4 +96,6 @@ class Utterance:
 
 
 class STTProvider(Protocol):
+    def preload(self) -> float: ...
+
     def transcribe(self, utterance: Utterance, language_hint: str | None = None) -> Transcript: ...

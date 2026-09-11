@@ -24,7 +24,7 @@ def audio_frame_from_samples(samples: NDArray[np.float32], frame_index: int) -> 
     if not np.all(np.isfinite(frame_samples)):
         raise AudioCliError("audio frame contains non-finite samples")
     return AudioFrame(
-        samples=np.ascontiguousarray(frame_samples, dtype=np.float32),
+        samples=np.array(frame_samples, dtype=np.float32, order="C", copy=True),
         frame_index=frame_index,
         captured_at_ns=monotonic_ns(),
     )

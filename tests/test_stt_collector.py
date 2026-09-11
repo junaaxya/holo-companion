@@ -5,6 +5,7 @@ from holo_companion.audio.types import AudioFrame
 from holo_companion.runtime.events import SpeechStarted
 from holo_companion.stt.base import SttError
 from holo_companion.stt.collector import UtteranceCollector
+from holo_companion.audio.stream import audio_frame_from_samples
 from holo_companion.vad.base import TurnDetector, VadPolicy
 
 
@@ -66,3 +67,27 @@ def test_collector_rejects_event_for_different_frame() -> None:
     # When / Then
     with pytest.raises(SttError, match="event/frame mismatch"):
         collector.process(frame(0), [SpeechStarted(start_frame_index=0, detected_frame_index=3, start_time_ms=0.0)])
+
+
+def test_collector_preserves_owned_frames_after_callback_buffer_reuse_and_reset() -> None:
+    # Given
+    collector = UtteranceCollector(history_frames=8)
+    detector = TurnDetector(VadPolicy(min_speech_ms=64, min_silence_ms=64, speech_pad_ms=30, threshold=0.5))
+    source = np.zeros((512, 1), dtype=np.float32)
+    utterance = None
+
+    # When
+    for index, probability in enumerate([0.9, 0.9, 0.9, 0.0, 0.0, 0.0]):
+        source.fill(index / 10.0)
+        audio_frame = audio_frame_from_samples(source, index)
+        source.fill(-0.77)
+        utterance = collector.process(audio_frame, list(detector.process(audio_frame, probability))) or utterance
+    assert utterance is not None
+    original = utterance.samples.copy()
+    collector.process(audio_frame_from_samples(np.full((512,), 0.91, dtype=np.float32), 6), [])
+
+    # Then
+    assert utterance.samples.dtype == np.float32
+    np.testing.assert_array_equal(utterance.samples, original)
+    np.testing.assert_array_equal(utterance.samples[:512], np.zeros(512, dtype=np.float32))
+    np.testing.assert_array_equal(utterance.samples[-512:], np.full(512, 0.2, dtype=np.float32))

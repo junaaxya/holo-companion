@@ -29,6 +29,19 @@ def test_audio_frame_conversion_accepts_flat_float32_frame_above_unit_amplitude(
     assert frame.frame_index == 3
 
 
+def test_audio_frame_owns_callback_samples_after_source_buffer_reuse() -> None:
+    # Given
+    samples = np.linspace(-0.8, 0.8, 512, dtype=np.float32)
+
+    # When
+    frame = audio_frame_from_samples(samples, frame_index=3)
+    samples.fill(0.017)
+
+    # Then
+    assert not np.shares_memory(frame.samples, samples)
+    np.testing.assert_array_equal(frame.samples, np.linspace(-0.8, 0.8, 512, dtype=np.float32))
+
+
 def test_audio_frame_conversion_accepts_single_channel_column_frame() -> None:
     # Given
     samples = np.zeros((512, 1), dtype=np.float32)
