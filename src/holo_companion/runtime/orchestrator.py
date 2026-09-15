@@ -1,6 +1,7 @@
 import anyio
 
 from holo_companion.llm.base import CancellationHandle, ChatMessage, LLMProvider, LlmError
+from holo_companion.llm.context import ConversationContext
 from holo_companion.runtime._speak import SpeakContext, generate_and_speak
 from holo_companion.runtime.metrics import MonotonicClock, SystemMonotonicClock, TurnTimestamps
 from holo_companion.runtime.ownership import OwnedTurn, StaleOutputError, TurnCancelledError, ensure_current, is_current
@@ -9,6 +10,7 @@ from holo_companion.runtime.provider_diagnostics import provider_diagnostic
 from holo_companion.runtime.result_factory import turn_result
 from holo_companion.runtime.state import RuntimeState, transition
 from holo_companion.runtime.stt_admission import SttAdmissionDiagnostics, bump_stt_cancel_diagnostic
+from holo_companion.runtime.style_selection import select_contextual_style
 from holo_companion.runtime.turn import InterruptionDiagnostic, TextTurnDiagnostic, TurnError, TurnErrorKind, TurnResult
 from holo_companion.stt.base import STTProvider, SttError, Transcript, Utterance
 from holo_companion.tts.base import StyleHints, TTSAudioChunk, TTSProvider, TtsError
@@ -22,13 +24,16 @@ class RuntimeOrchestrator:
         playback: PlaybackSink,
         clock: MonotonicClock | None = None,
         style: StyleHints | None = None,
+        context: ConversationContext | None = None,
     ) -> None:
         self._stt = stt
         self._llm = llm
         self._tts = tts
         self._playback = playback
         self._clock = clock or SystemMonotonicClock()
+        self._custom_style = style is not None
         self._style = style or StyleHints(emotion="neutral", energy=0.5, intensity=0.5, speaking_style="neutral")
+        self._context = context or ConversationContext()
         self._state = RuntimeState.IDLE
         self._history: list[RuntimeState] = [RuntimeState.IDLE]
         self._results: list[TurnResult] = []
@@ -48,6 +53,10 @@ class RuntimeOrchestrator:
     @property
     def turn_results(self) -> tuple[TurnResult, ...]:
         return tuple(self._results)
+
+    @property
+    def context(self) -> ConversationContext:
+        return self._context
 
     @property
     def stt_diagnostics(self) -> SttAdmissionDiagnostics:
@@ -77,14 +86,17 @@ class RuntimeOrchestrator:
         transcript: Transcript | None = None
         assistant_parts: list[str] = []
         text_diagnostic: TextTurnDiagnostic | None = None
+        turn_context: ConversationContext | None = None
         try:
             with anyio.CancelScope() as scope:
                 owned.scope = scope
                 timestamps, transcript = await self._transcribe(owned, utterance, timestamps)
-                messages = (ChatMessage("user", transcript.text),)
+                turn_context = self._context.with_user_prompt(transcript.text)
+                messages = turn_context.provider_messages()
+                turn_style = self._style if self._custom_style else select_contextual_style(transcript.text)
                 ctx = SpeakContext(
                     llm=self._llm, tts=self._tts, playback=self._playback,
-                    clock=self._clock, style=self._style,
+                    clock=self._clock, style=turn_style,
                     move=self._move, ensure_current=self._ensure_current,
                     is_current=self._is_current, get_state=lambda: self._state,
                 )
@@ -106,6 +118,8 @@ class RuntimeOrchestrator:
                 self._stt_diagnostics, stt_ran=owned.stt_started
             )
             return self._finish(owned, transcript, utterance, assistant_parts, timestamps, TurnError(TurnErrorKind.CANCELLED, "turn", interruption=owned.interruption))
+        if turn_context is not None:
+            self._context = turn_context.with_assistant_response("".join(assistant_parts))
         return self._finish(owned, transcript, utterance, assistant_parts, timestamps, None, text_diagnostic)
 
     async def reject_stale_for_test(self, *, turn_id: int, generation_id: int, chunk: TTSAudioChunk) -> None:

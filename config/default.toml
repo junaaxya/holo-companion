@@ -1,7 +1,7 @@
 [llm]
 provider = "openai_compatible"
 base_url = "http://localhost:20128/v1"
-model = "ag/gemini-3.6-flash-low"
+model = "gh/gpt-4o-mini"
 timeout_seconds = 30.0
 stability = 0.40
 

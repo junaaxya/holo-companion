@@ -56,9 +56,10 @@ class FakeLlm:
     closed: bool = False
     fail: bool = False
     bug: bool = False
+    received_messages: list[tuple[ChatMessage, ...]] = field(default_factory=list)
 
     async def stream(self, messages: tuple[ChatMessage, ...], cancellation: object | None = None) -> AsyncIterator[LlmStreamEvent]:
-        del messages
+        self.received_messages.append(messages)
         self.entered.set()
         if self.release is not None:
             try:

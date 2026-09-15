@@ -2,6 +2,7 @@ import anyio
 import numpy as np
 import pytest
 
+from holo_companion.llm.context import ConversationContext, PERSONA_PROMPT
 from holo_companion.runtime.metrics import ManualClock
 from holo_companion.runtime.orchestrator import RuntimeOrchestrator
 from holo_companion.runtime.state import InvalidStateTransition, RuntimeState, transition
@@ -43,6 +44,7 @@ def orchestrator(
     tts: FakeTts | None = None,
     playback: FakePlayback | None = None,
     clock: ManualClock | None = None,
+    context: ConversationContext | None = None,
 ) -> RuntimeOrchestrator:
     return RuntimeOrchestrator(
         stt=stt or FakeStt(transcript()),
@@ -50,6 +52,7 @@ def orchestrator(
         tts=tts or FakeTts(audio_chunk()),
         playback=playback or FakePlayback(),
         clock=clock or ManualClock(),
+        context=context,
     )
 
 
@@ -498,4 +501,132 @@ async def test_normal_assistant_replies_play_to_completion_with_playback_sink() 
     assert [adm.turn_id for adm in playback.admissions] == [1, 1]
     assert playback.closed is True
 
+
+@pytest.mark.anyio
+async def test_runtime_first_turn_sends_system_plus_user_with_holo_persona() -> None:
+    # Given
+    llm = FakeLlm(chunks=("Hai Master!",))
+    runtime = orchestrator(llm=llm)
+    await runtime.start()
+    await runtime.speech_started()
+
+    # When
+    result = await runtime.speech_ended(utterance())
+    await runtime.aclose()
+
+    # Then
+    assert result is not None and result.error is None
+    assert len(llm.received_messages) == 1
+    messages = llm.received_messages[0]
+    roles = [m.role for m in messages]
+    assert roles == ["system", "user"]
+    assert messages[0].content == PERSONA_PROMPT
+    assert messages[1].content == "halo holo"
+    assert roles.count("system") == 1
+
+
+@pytest.mark.anyio
+async def test_runtime_second_turn_includes_previous_conversation_history() -> None:
+    # Given
+    llm = FakeLlm(chunks=("Hai Master!",))
+    runtime = orchestrator(llm=llm)
+    await runtime.start()
+
+    # When
+    await runtime.speech_started()
+    result1 = await runtime.speech_ended(utterance())
+    assert result1 is not None and result1.error is None
+    llm.chunks = ("Lagi santai nih, Master.",)
+    await runtime.speech_started()
+    result2 = await runtime.speech_ended(utterance())
+    await runtime.aclose()
+
+    # Then
+    assert result2 is not None and result2.error is None
+    assert len(llm.received_messages) == 2
+    turn2_messages = llm.received_messages[1]
+    turn2_roles = [m.role for m in turn2_messages]
+    assert turn2_roles == ["system", "user", "assistant", "user"]
+    assert turn2_roles.count("system") == 1
+    assert turn2_messages[0].content == PERSONA_PROMPT
+    assert turn2_messages[1].content == "halo holo"
+    assert turn2_messages[2].content == "Hai Master!"
+    assert turn2_messages[3].content == "halo holo"
+
+
+@pytest.mark.anyio
+async def test_runtime_custom_persona_and_debug_request_messages_match_provider_payload() -> None:
+    # Given
+    from holo_companion.llm.base import LlmConfig
+    from holo_companion.llm.openai_compatible import request_debug_payload
+    from holo_companion.llm.payloads import message_payload
+
+    custom_persona = "Persona kustom untuk Holo."
+    context = ConversationContext(system_prompt=custom_persona)
+    llm = FakeLlm(chunks=("Jawaban pertama.",))
+    runtime = orchestrator(llm=llm, context=context)
+    await runtime.start()
+    await runtime.speech_started()
+
+    # When
+    result = await runtime.speech_ended(utterance())
+    await runtime.aclose()
+
+    # Then
+    assert result is not None
+    messages = llm.received_messages[0]
+    assert [m.role for m in messages] == ["system", "user"]
+    assert messages[0].content == custom_persona
+
+    config = LlmConfig(provider="openai_compatible", base_url="http://localhost:20128/v1", model="ag/gemini-3.6-flash-low", api_key="secret")
+    request_body = {"model": config.model, "messages": [message_payload(m) for m in messages], "stream": True}
+    debug_payload = request_debug_payload(config, request_body)
+
+    assert debug_payload["message_count"] == len(messages) == 2
+    assert debug_payload["message_roles"] == [m.role for m in messages] == ["system", "user"]
+    assert debug_payload["messages"] == [{"role": m.role, "content": m.content} for m in messages]
+
+
+@pytest.mark.anyio
+async def test_runtime_selects_contextual_tts_style_dynamically_when_not_overridden() -> None:
+    # Given
+    tts = FakeTts(audio_chunk())
+    stt = FakeStt(transcript("Aku kangen kamu, Master."))
+    runtime = orchestrator(stt=stt, tts=tts, llm=FakeLlm(chunks=("Hehe... aku juga, Master.",)))
+    await runtime.start()
+    await runtime.speech_started()
+
+    # When
+    result = await runtime.speech_ended(utterance())
+    await runtime.aclose()
+
+    # Then
+    assert result is not None
+    assert len(tts.requests) == 2
+    for req in tts.requests:
+        assert req.style is not None
+        assert req.style.emotion == "shy"
+        assert req.style.speaking_style == "playful"
+
+
+@pytest.mark.anyio
+async def test_runtime_selects_neutral_style_for_casual_input() -> None:
+    # Given
+    tts = FakeTts(audio_chunk())
+    stt = FakeStt(transcript("Minum apa enaknya?"))
+    runtime = orchestrator(stt=stt, tts=tts, llm=FakeLlm(chunks=("Kopi enak nih.",)))
+    await runtime.start()
+    await runtime.speech_started()
+
+    # When
+    result = await runtime.speech_ended(utterance())
+    await runtime.aclose()
+
+    # Then
+    assert result is not None
+    assert len(tts.requests) == 1
+    req_style = tts.requests[0].style
+    assert req_style is not None
+    assert req_style.emotion == "neutral"
+    assert req_style.speaking_style == "neutral"
 

@@ -130,6 +130,87 @@ def test_default_conversation_context_has_nonempty_system_prompt() -> None:
     assert "Holo" in provider_messages[0].content
 
 
+def test_conversation_context_appends_assistant_response() -> None:
+    # Given
+    context = ConversationContext().with_user_prompt("Halo")
+
+    # When
+    updated = context.with_assistant_response("Halo Master!")
+    provider_messages = updated.provider_messages()
+
+    # Then
+    assert [message.role for message in provider_messages] == ["system", "user", "assistant"]
+    assert provider_messages[1].content == "Halo"
+    assert provider_messages[2].content == "Halo Master!"
+    assert updated.with_assistant_response("   ") is updated
+
+
+def test_provider_messages_trims_orphan_assistant_at_max_messages_boundary() -> None:
+    # Given
+    messages = (
+        ChatMessage(role="user", content="u0"),
+        ChatMessage(role="assistant", content="a0"),
+        ChatMessage(role="user", content="u1"),
+        ChatMessage(role="assistant", content="a1"),
+        ChatMessage(role="user", content="u2"),
+        ChatMessage(role="assistant", content="a2"),
+        ChatMessage(role="user", content="u3"),
+    )
+    context = ConversationContext(messages=messages, max_messages=6)
+
+    # When
+    provider_messages = context.provider_messages()
+
+    # Then
+    roles = [message.role for message in provider_messages]
+    assert roles == ["system", "user", "assistant", "user", "assistant", "user"]
+    assert [message.content for message in provider_messages[1:]] == ["u1", "a1", "u2", "a2", "u3"]
+
+
+def test_provider_messages_trims_orphan_assistant_at_character_limit_boundary() -> None:
+    # Given
+    u1_large = "x" * 500
+    messages = (
+        ChatMessage(role="user", content=u1_large),
+        ChatMessage(role="assistant", content="a1"),
+        ChatMessage(role="user", content="u2"),
+        ChatMessage(role="assistant", content="a2"),
+        ChatMessage(role="user", content="u3"),
+    )
+    system = "sys"
+    max_chars = len(system) + 15
+    context = ConversationContext(messages=messages, system_prompt=system, max_chars=max_chars)
+
+    # When
+    provider_messages = context.provider_messages()
+
+    # Then
+    roles = [message.role for message in provider_messages]
+    assert roles == ["system", "user", "assistant", "user"]
+    assert [message.content for message in provider_messages[1:]] == ["u2", "a2", "u3"]
+
+
+def test_provider_messages_drops_all_history_if_latest_turn_pair_cannot_fit() -> None:
+    # Given
+    u1_large = "x" * 500
+    messages = (
+        ChatMessage(role="user", content=u1_large),
+        ChatMessage(role="assistant", content="a1"),
+        ChatMessage(role="user", content="u2"),
+    )
+    system = "sys"
+    max_chars = len(system) + 3
+    context = ConversationContext(messages=messages, system_prompt=system, max_chars=max_chars)
+
+    # When
+    provider_messages = context.provider_messages()
+
+    # Then
+    roles = [message.role for message in provider_messages]
+    assert roles == ["system", "user"]
+    assert provider_messages[1].content == "u2"
+
+
 def test_cancellation_handle_raises_typed_error_after_cancel() -> None:
     # Given
     cancellation = CancellationHandle()
