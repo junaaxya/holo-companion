@@ -8,7 +8,19 @@ import pytest
 from holo_companion.llm.base import CancellationHandle
 from holo_companion.runtime.pipeline import AUDIO_QUEUE_CAPACITY, TEXT_QUEUE_CAPACITY, AudioWorkItem, SpeechPipeline, TextWorkItem, _unpack_task_group_error
 from holo_companion.runtime.playback import PlaybackAdmission
-from holo_companion.tts.base import StyleHints, SynthesisMetrics, SynthesisRequest, SynthesisResult, SynthesisStatus, TTSAudioChunk, TtsAudioFormat, TtsError, TtsErrorKind, TtsStreamEvent
+from holo_companion.tts.base import (
+    StyleHints,
+    SynthesisMetrics,
+    SynthesisRequest,
+    SynthesisResult,
+    SynthesisStatus,
+    TTSAudioChunk,
+    TtsAudioFormat,
+    TtsError,
+    TtsErrorKind,
+    TtsProviderDiagnostic,
+    TtsStreamEvent,
+)
 
 
 def audio_chunk(sequence: int = 0) -> TTSAudioChunk:
@@ -269,3 +281,145 @@ def test_pipeline_preserves_unexpected_exception_group() -> None:
 
     # Then
     assert recovered is None
+
+
+@pytest.mark.anyio
+async def test_pipeline_retries_empty_audio_once_and_succeeds() -> None:
+    # Given
+    empty_error = TtsError(
+        TtsErrorKind.PROVIDER,
+        "empty_audio",
+        TtsProviderDiagnostic(stage="audio_decode", error="empty_audio"),
+    )
+
+    class EmptyThenSuccessTts(RecordingTts):
+        attempt: int = 0
+
+        async def stream(self, request: SynthesisRequest, cancellation: CancellationHandle | None = None) -> AsyncIterator[TtsStreamEvent]:
+            self.requests.append(request)
+            self.attempt += 1
+            if self.attempt == 1:
+                raise empty_error
+            yield audio_chunk(0)
+
+    tts = EmptyThenSuccessTts()
+    playback = RecordingPlayback()
+    pipeline = SpeechPipeline(tts=tts, playback=playback, is_current=current_guard())
+
+    async def produce(send: Callable[[TextWorkItem], Awaitable[None]]) -> None:
+        await send(TextWorkItem(1, 1, 0, "coba lagi", None))
+
+    # When
+    await pipeline.run_text_to_audio(produce, CancellationHandle())
+
+    # Then
+    assert tts.attempt == 2
+    assert len(tts.requests) == 2
+    assert len(playback.admissions) == 1
+
+
+@pytest.mark.anyio
+async def test_pipeline_does_not_retry_unrelated_tts_error() -> None:
+    # Given
+    timeout_error = TtsError(
+        TtsErrorKind.PROVIDER,
+        "timeout",
+        TtsProviderDiagnostic(stage="timeout", error="timeout"),
+    )
+
+    class FailingTts(RecordingTts):
+        async def stream(self, request: SynthesisRequest, cancellation: CancellationHandle | None = None) -> AsyncIterator[TtsStreamEvent]:
+            self.requests.append(request)
+            raise timeout_error
+            yield audio_chunk(0)
+
+    tts = FailingTts()
+    pipeline = SpeechPipeline(tts=tts, playback=RecordingPlayback(), is_current=current_guard())
+
+    async def produce(send: Callable[[TextWorkItem], Awaitable[None]]) -> None:
+        await send(TextWorkItem(1, 1, 0, "gagal", None))
+
+    # When / Then
+    with pytest.raises(TtsError) as exc_info:
+        await pipeline.run_text_to_audio(produce, CancellationHandle())
+
+    assert exc_info.value is timeout_error
+    assert len(tts.requests) == 1
+
+
+@pytest.mark.anyio
+async def test_pipeline_does_not_retry_empty_audio_when_cancelled() -> None:
+    # Given
+    empty_error = TtsError(
+        TtsErrorKind.PROVIDER,
+        "empty_audio",
+        TtsProviderDiagnostic(stage="audio_decode", error="empty_audio"),
+    )
+
+    class FailingTts(RecordingTts):
+        async def stream(self, request: SynthesisRequest, cancellation: CancellationHandle | None = None) -> AsyncIterator[TtsStreamEvent]:
+            self.requests.append(request)
+            raise empty_error
+            yield audio_chunk(0)
+
+    tts = FailingTts()
+    pipeline = SpeechPipeline(tts=tts, playback=RecordingPlayback(), is_current=current_guard())
+    cancellation = CancellationHandle()
+    cancellation.cancel("barge-in")
+
+    async def produce(send: Callable[[TextWorkItem], Awaitable[None]]) -> None:
+        await send(TextWorkItem(1, 1, 0, "batal", None))
+
+    # When / Then
+    with pytest.raises(TtsError) as exc_info:
+        await pipeline.run_text_to_audio(produce, cancellation)
+
+    assert exc_info.value is empty_error
+    assert len(tts.requests) == 1
+
+
+@pytest.mark.anyio
+async def test_pipeline_logs_empty_audio_diagnostics_on_retry_and_final_failure(capsys) -> None:
+    # Given
+    empty_error = TtsError(
+        TtsErrorKind.PROVIDER,
+        "empty_audio",
+        TtsProviderDiagnostic(
+            stage="audio_decode",
+            status_code=200,
+            error="empty_audio",
+            content_type="audio/pcm",
+            received_byte_count=0,
+            decoded_sample_count=0,
+            stream_completed_normally=True,
+        ),
+    )
+
+    class AlwaysEmptyTts(RecordingTts):
+        async def stream(self, request: SynthesisRequest, cancellation: CancellationHandle | None = None) -> AsyncIterator[TtsStreamEvent]:
+            self.requests.append(request)
+            raise empty_error
+            yield audio_chunk(0)
+
+    tts = AlwaysEmptyTts()
+    pipeline = SpeechPipeline(tts=tts, playback=RecordingPlayback(), is_current=current_guard())
+
+    async def produce(send: Callable[[TextWorkItem], Awaitable[None]]) -> None:
+        await send(TextWorkItem(5, 2, 3, "kopi hangat", None))
+
+    # When / Then
+    with pytest.raises(TtsError):
+        await pipeline.run_text_to_audio(produce, CancellationHandle())
+
+    assert len(tts.requests) == 2
+    err = capsys.readouterr().err
+    assert "turn_id: 5" in err
+    assert "TTS segment index: 3" in err
+    assert "segment text length: 11" in err
+    assert "retry attempt: 0" in err
+    assert "whether retry was triggered: True" in err
+    assert "retry attempt: 1" in err
+    assert "whether retry was triggered: False" in err
+    assert "HTTP status: 200" in err
+    assert "response content-type: audio/pcm" in err
+    assert "whether HTTP stream completed normally: True" in err

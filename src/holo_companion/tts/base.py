@@ -33,6 +33,40 @@ class TtsProviderDiagnostic:
     error_class: str | None = None
     message: str | None = None
     model: str | None = None
+    content_type: str | None = None
+    received_byte_count: int = 0
+    decoded_sample_count: int = 0
+    stream_completed_normally: bool = False
+
+
+def format_empty_audio_diagnostic(
+    turn_id: int,
+    segment_index: int,
+    text_length: int,
+    retry_attempt: int,
+    diagnostic: TtsProviderDiagnostic | None,
+    retry_triggered: bool,
+    cancellation_or_staleness_active: bool,
+) -> str:
+    status_code = diagnostic.status_code if diagnostic else None
+    content_type = diagnostic.content_type if diagnostic else None
+    received_bytes = diagnostic.received_byte_count if diagnostic else 0
+    decoded_samples = diagnostic.decoded_sample_count if diagnostic else 0
+    stream_completed = diagnostic.stream_completed_normally if diagnostic else False
+    return (
+        "empty_audio diagnostic:\n"
+        f"  turn_id: {turn_id}\n"
+        f"  TTS segment index: {segment_index}\n"
+        f"  segment text length: {text_length}\n"
+        f"  retry attempt: {retry_attempt}\n"
+        f"  HTTP status: {status_code}\n"
+        f"  response content-type: {content_type}\n"
+        f"  total raw response bytes received: {received_bytes}\n"
+        f"  decoded PCM sample count: {decoded_samples}\n"
+        f"  whether HTTP stream completed normally: {stream_completed}\n"
+        f"  whether retry was triggered: {retry_triggered}\n"
+        f"  whether cancellation/staleness was active: {cancellation_or_staleness_active}"
+    )
 
 
 class TtsError(Exception):

@@ -93,3 +93,17 @@ def test_normalize_spoken_text_removes_markdown_list_markers_and_emphasis() -> N
     assert normalized == "Makanan: Kopi\nkacang tanah"
 
 
+def test_normalize_spoken_text_preserves_hyphenated_indonesian_words() -> None:
+    # Given
+    raw = "## Tips:\n- malam-malam jangan lupa jaket\n- jalan-jalan sore\n1. hati-hati di jalan ya"
+
+    # When
+    normalized = normalize_spoken_text(raw)
+
+    # Then
+    assert "malam-malam" in normalized
+    assert "jalan-jalan" in normalized
+    assert "hati-hati" in normalized
+    assert normalized == "Tips: malam-malam jangan lupa jaket\njalan-jalan sore\nhati-hati di jalan ya"
+    assert normalize_spoken_text("-malam") == "-malam"
+    assert normalize_spoken_text("malam-malam") == "malam-malam"

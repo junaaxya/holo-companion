@@ -5,7 +5,16 @@ import anyio
 
 from holo_companion.llm.base import CancellationHandle
 from holo_companion.runtime.playback import PlaybackAdmission, PlaybackSink
-from holo_companion.tts.base import SynthesisRequest, SynthesisResult, TTSAudioChunk, TTSProvider, StyleHints, TtsError
+from holo_companion.tts.base import (
+    StyleHints,
+    SynthesisRequest,
+    SynthesisResult,
+    TTSAudioChunk,
+    TTSProvider,
+    TtsError,
+    TtsProviderDiagnostic,
+    format_empty_audio_diagnostic,
+)
 
 TEXT_QUEUE_CAPACITY = 2
 AUDIO_QUEUE_CAPACITY = 2
@@ -84,15 +93,64 @@ class SpeechPipeline:
                 request = SynthesisRequest(item.text, item.style)
                 if self.on_text_submitted is not None:
                     await self.on_text_submitted(item)
-                async for event in self.tts.stream(request, cancellation):
-                    if isinstance(event, TTSAudioChunk):
-                        if self.is_current(item.turn_id, item.generation_id):
-                            audio_item = AudioWorkItem(item.turn_id, item.generation_id, item.sequence, event)
-                            if self.on_audio_generated is not None:
-                                await self.on_audio_generated(audio_item)
-                            await send.send(audio_item)
-                    elif isinstance(event, SynthesisResult):
-                        pass
+                try:
+                    await self._stream_tts(request, item, send, cancellation)
+                except TtsError as error:
+                    diag = error.diagnostic
+                    if diag is not None and diag.error == "empty_audio":
+                        cancelled_or_stale = cancellation.is_cancelled() or not self.is_current(item.turn_id, item.generation_id)
+                        retry_triggered = not cancelled_or_stale
+                        self._log_empty_audio_diagnostic(item, 0, diag, retry_triggered, cancelled_or_stale)
+                        if retry_triggered:
+                            try:
+                                await self._stream_tts(request, item, send, cancellation)
+                                continue
+                            except TtsError as retry_error:
+                                retry_diag = retry_error.diagnostic
+                                retry_cancelled_or_stale = cancellation.is_cancelled() or not self.is_current(item.turn_id, item.generation_id)
+                                self._log_empty_audio_diagnostic(item, 1, retry_diag, False, retry_cancelled_or_stale)
+                                raise
+                    raise
+
+    def _log_empty_audio_diagnostic(
+        self,
+        item: TextWorkItem,
+        retry_attempt: int,
+        diagnostic: TtsProviderDiagnostic | None,
+        retry_triggered: bool,
+        cancelled_or_stale: bool,
+    ) -> None:
+        import sys
+        print(
+            format_empty_audio_diagnostic(
+                turn_id=item.turn_id,
+                segment_index=item.sequence,
+                text_length=len(item.text),
+                retry_attempt=retry_attempt,
+                diagnostic=diagnostic,
+                retry_triggered=retry_triggered,
+                cancellation_or_staleness_active=cancelled_or_stale,
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+
+    async def _stream_tts(
+        self,
+        request: SynthesisRequest,
+        item: TextWorkItem,
+        send: anyio.abc.ObjectSendStream[AudioWorkItem],
+        cancellation: CancellationHandle,
+    ) -> None:
+        async for event in self.tts.stream(request, cancellation):
+            if isinstance(event, TTSAudioChunk):
+                if self.is_current(item.turn_id, item.generation_id):
+                    audio_item = AudioWorkItem(item.turn_id, item.generation_id, item.sequence, event)
+                    if self.on_audio_generated is not None:
+                        await self.on_audio_generated(audio_item)
+                    await send.send(audio_item)
+            elif isinstance(event, SynthesisResult):
+                pass
 
     async def _play_audio(self, receive: anyio.abc.ObjectReceiveStream[AudioWorkItem]) -> None:
         async with receive:

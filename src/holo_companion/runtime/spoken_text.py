@@ -1,8 +1,8 @@
 import re
 
 _MARKDOWN_HEADER = re.compile(r"(?m)^[ \t]*#{1,6}[ \t]*")
-_MARKDOWN_LIST = re.compile(r"(?m)^[ \t]*(?:[-+*]|\d+[.)])[ \t]*")
-_INLINE_NUMBERED = re.compile(r"(?:^|\s+)\d+[.)]\s*")
+_MARKDOWN_LIST = re.compile(r"(?m)^[ \t]*(?:[-+*]|\d+[.)])(?=[ \t]|$)[ \t]*")
+_INLINE_NUMBERED = re.compile(r"(?:^|\s+)\d+[.)](?=[ \t]|$)\s*")
 _HEADING_COLON_LINE = re.compile(r"(?m)^[ \t]*([A-Za-z0-9_]{1,16}:)[ \t]*\n")
 
 
