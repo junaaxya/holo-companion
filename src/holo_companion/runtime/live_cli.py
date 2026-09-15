@@ -14,8 +14,10 @@ from holo_companion.audio.types import CAPTURE_CHANNELS, CAPTURE_DTYPE, CAPTURE_
 from holo_companion.llm.config import load_llm_config
 from holo_companion.llm.openai_compatible import provider_from_config as llm_provider_from_config
 from holo_companion.runtime.barge_in import AdaptiveBargeInGate
-from holo_companion.runtime.greeting import select_startup_greeting
+from holo_companion.runtime.greeting import play_startup_greeting, select_startup_greeting
 from holo_companion.runtime.live_pump import CaptureVadPump, InterruptionGuard
+
+_play_startup_greeting = play_startup_greeting
 from holo_companion.runtime.orchestrator import RuntimeOrchestrator
 from holo_companion.runtime.playback import PlaybackAdmission
 from holo_companion.runtime.turn import TurnResult
@@ -167,92 +169,6 @@ def _utterance_dumper(directory: Path | None, stdout: TextIO):
         stdout.write(f"utterance dump: {path}\n")
 
     return dump
-
-
-async def _play_startup_greeting(tts_provider, playback, stdout: TextIO) -> None:
-    import os
-    import numpy as np
-    import soundfile
-    request = select_startup_greeting()
-    mapped_text = getattr(tts_provider, "emotion_mapper", None)
-    after_mapping = mapped_text.map_text(request.text, request.style).text if mapped_text else request.text
-    stdout.write(f"greeting: {request.text}\n")
-    stdout.write(f"startup original text: {request.text}\n")
-    stdout.write(f"startup text after EmotionMapper: {after_mapping}\n")
-    stdout.write(f"exact text submitted to ElevenLabs: {after_mapping}\n")
-    stdout.write(f"startup TTS text: {request.text}\n")
-    debug_audio = os.environ.get("HOLO_DEBUG_TTS_AUDIO") == "1"
-    provider_audio_chunks: list[np.ndarray] = []
-    playback_audio_chunks: list[np.ndarray] = []
-    sample_rate_hz = 24000
-
-    def capture_playback_samples(samples: np.ndarray, rate: int) -> None:
-        nonlocal sample_rate_hz
-        sample_rate_hz = rate
-        if debug_audio:
-            playback_audio_chunks.append(samples.copy())
-
-    orig_consumed_cb = getattr(playback, "on_samples_consumed", None)
-
-    def combined_consumed_cb(samples: np.ndarray, rate: int) -> None:
-        capture_playback_samples(samples, rate)
-        if orig_consumed_cb is not None:
-            orig_consumed_cb(samples, rate)
-
-    if hasattr(playback, "on_samples_consumed"):
-        playback.on_samples_consumed = combined_consumed_cb
-
-    chunk_count = 0
-    received_samples = 0
-    queued_samples = 0
-    stream_completed = False
-    stop_reason: str | None = None
-    try:
-        sequence = 0
-        async for event in tts_provider.stream(request):
-            if isinstance(event, TTSAudioChunk):
-                chunk_count += 1
-                received_samples += event.samples.size
-                if debug_audio:
-                    provider_audio_chunks.append(event.samples.copy())
-                sample_rate_hz = event.audio_format.sample_rate_hz
-                await playback.write_and_start(PlaybackAdmission(0, 0, event))
-                queued_samples += event.samples.size
-                sequence += 1
-        stream_completed = True
-        if hasattr(playback, "wait_until_drained"):
-            await playback.wait_until_drained()
-    except anyio.get_cancelled_exc_class():
-        stop_reason = "cancelled"
-        raise
-    except Exception as error:
-        stop_reason = str(error)
-        stdout.write(f"greeting error: {error}\n")
-    finally:
-        if hasattr(playback, "on_samples_consumed"):
-            playback.on_samples_consumed = orig_consumed_cb
-        consumed_samples = getattr(playback, "total_consumed_samples", sum(chunk.size for chunk in playback_audio_chunks))
-        stdout.write(f"provider audio chunk count: {chunk_count}\n")
-        stdout.write(f"provider total samples: {received_samples}\n")
-        stdout.write(f"provider total duration: {received_samples / sample_rate_hz:.3f} s\n")
-        stdout.write(f"provider stream completed: {stream_completed}\n")
-        stdout.write(f"playback queued samples: {queued_samples}\n")
-        stdout.write(f"playback consumed samples: {consumed_samples}\n")
-        stdout.write(f"playback drain completed: {stream_completed and stop_reason is None}\n")
-        stdout.write(f"stop/cancel/interruption reason: {stop_reason or 'none'}\n")
-
-        if debug_audio:
-            try:
-                if provider_audio_chunks:
-                    all_provider_pcm = np.concatenate(provider_audio_chunks)
-                    soundfile.write("/tmp/holo-provider.wav", all_provider_pcm, sample_rate_hz, format="WAV", subtype="PCM_16")
-                    stdout.write(f"debug saved: /tmp/holo-provider.wav ({all_provider_pcm.size} samples)\n")
-                if playback_audio_chunks:
-                    all_playback_pcm = np.concatenate(playback_audio_chunks)
-                    soundfile.write("/tmp/holo-playback.wav", all_playback_pcm, sample_rate_hz, format="WAV", subtype="PCM_16")
-                    stdout.write(f"debug saved: /tmp/holo-playback.wav ({all_playback_pcm.size} samples)\n")
-            except Exception as dump_err:
-                stdout.write(f"debug dump error: {dump_err}\n")
 
 
 def run_talk_cli(args, backend: AudioBackend, stdout: TextIO, stderr: TextIO) -> int:

@@ -1,3 +1,4 @@
+import json
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, WebSocketException
 
 from holo_companion.tts.base import TtsError, TtsErrorKind, TtsProviderDiagnostic
@@ -12,6 +13,28 @@ def config_error(message: str, model: str) -> TtsError:
     )
 
 
+def is_quota_exceeded(body: bytes) -> bool:
+    try:
+        data = json.loads(body.decode("utf-8", errors="replace"))
+        if isinstance(data, dict):
+            detail = data.get("detail")
+            if isinstance(detail, dict):
+                code = str(detail.get("status") or detail.get("code") or "")
+                msg = str(detail.get("message") or "")
+                if code == "quota_exceeded" or "quota" in code.lower() or "credits remaining" in msg.lower():
+                    return True
+            elif isinstance(detail, str) and ("quota_exceeded" in detail.lower() or "quota" in detail.lower()):
+                return True
+            code = str(data.get("code") or data.get("status") or data.get("error") or "")
+            msg = str(data.get("message") or "")
+            if code == "quota_exceeded" or "quota" in code.lower() or "credits remaining" in msg.lower():
+                return True
+    except Exception:
+        pass
+    text_lower = body.decode("utf-8", errors="replace").lower()
+    return "quota_exceeded" in text_lower or "0 credits remaining" in text_lower
+
+
 def provider_diagnostic_error(
     stage: str,
     error: str,
@@ -21,10 +44,12 @@ def provider_diagnostic_error(
     status_code: int | None = None,
     close_code: int | None = None,
 ) -> TtsError:
+    message = "ElevenLabs quota exhausted" if error == "quota_exceeded" else None
+    error_msg = message or "ElevenLabs TTS provider failure"
     return TtsError(
         TtsErrorKind.PROVIDER,
-        "ElevenLabs TTS provider failure",
-        TtsProviderDiagnostic(stage, status_code, close_code, error, error_class, None, model),
+        error_msg,
+        TtsProviderDiagnostic(stage, status_code, close_code, error, error_class, message, model),
     )
 
 

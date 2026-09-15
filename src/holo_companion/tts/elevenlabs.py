@@ -23,6 +23,7 @@ from holo_companion.tts.base import (
 )
 from holo_companion.tts._elevenlabs_diagnostics import (
     config_error,
+    is_quota_exceeded,
     provider_diagnostic_error,
     sanitize_message,
     with_model,
@@ -92,6 +93,9 @@ class ElevenLabsTTSProvider:
         carry = b""
         audio_format = TtsAudioFormat(sample_rate_hz=ELEVENLABS_SAMPLE_RATE_HZ)
         start = self.monotonic_seconds()
+        http_status: int | None = None
+        content_type: str | None = None
+        stream_completed_normally = False
 
         url = f"{self.config.base_url.rstrip('/')}/v1/text-to-dialogue/stream?output_format=pcm_24000"
         headers = {"xi-api-key": self.config.api_key}
@@ -103,9 +107,20 @@ class ElevenLabsTTSProvider:
         try:
             stream_ctx = self.connector.stream_text_to_dialogue(url, headers, payload)
             async with stream_ctx as response:
+                http_status = response.status_code
+                content_type = response.headers.get("content-type")
                 if response.status_code >= 400:
                     body = await response.aread()
                     error_msg = body.decode("utf-8", errors="replace")[:160]
+                    if is_quota_exceeded(body):
+                        raise provider_error(
+                            "http_request",
+                            "quota_exceeded",
+                            "http",
+                            model=self.config.model_id,
+                            status_code=response.status_code,
+                            message="ElevenLabs quota exhausted",
+                        )
                     raise provider_error(
                         "http_request",
                         "status_error",
@@ -140,6 +155,7 @@ class ElevenLabsTTSProvider:
                         sequence += 1
                         sample_count += samples.size
                         yield chunk
+                stream_completed_normally = True
         except httpx.TimeoutException as error:
             raise provider_diagnostic_error("timeout", "http_stream", "timeout", self.config.model_id) from error
         except httpx.HTTPError as error:
@@ -148,7 +164,22 @@ class ElevenLabsTTSProvider:
         if carry:
             raise provider_diagnostic_error("audio_decode", "malformed_pcm", "audio", self.config.model_id)
         if sequence == 0 and not handle.is_cancelled():
-            raise provider_diagnostic_error("audio_decode", "empty_audio", "audio", self.config.model_id)
+            from holo_companion.tts.base import TtsProviderDiagnostic
+            raise TtsError(
+                TtsErrorKind.PROVIDER,
+                "ElevenLabs TTS provider failure",
+                TtsProviderDiagnostic(
+                    stage="audio_decode",
+                    status_code=http_status,
+                    error="empty_audio",
+                    error_class="audio",
+                    model=self.config.model_id,
+                    content_type=content_type,
+                    received_byte_count=byte_count,
+                    decoded_sample_count=sample_count,
+                    stream_completed_normally=stream_completed_normally,
+                ),
+            )
 
         synthesis_seconds = self.monotonic_seconds() - start
         generated_seconds = sample_count / ELEVENLABS_SAMPLE_RATE_HZ

@@ -188,6 +188,24 @@ async def test_elevenlabs_http_provider_status_error_mapped_to_tts_error() -> No
 
 
 @pytest.mark.anyio
+async def test_elevenlabs_http_provider_detects_quota_exceeded_explicitly() -> None:
+    # Given
+    response = httpx.Response(401, text='{"code":"quota_exceeded","message":"0 credits remaining"}')
+    provider, _requests, _connector = http_provider_with_response(response, FakeClock([1.0]))
+
+    # When / Then
+    with pytest.raises(TtsError) as exc_info:
+        _ = [event async for event in provider.stream(SynthesisRequest(text="Halo"))]
+
+    assert exc_info.value.kind is TtsErrorKind.PROVIDER
+    assert exc_info.value.message == "ElevenLabs quota exhausted"
+    assert exc_info.value.diagnostic is not None
+    assert exc_info.value.diagnostic.status_code == 401
+    assert exc_info.value.diagnostic.error == "quota_exceeded"
+    assert exc_info.value.diagnostic.message == "ElevenLabs quota exhausted"
+
+
+@pytest.mark.anyio
 async def test_elevenlabs_http_provider_timeout_mapped_to_tts_error() -> None:
     # Given
     async def handler(request: httpx.Request) -> httpx.Response:

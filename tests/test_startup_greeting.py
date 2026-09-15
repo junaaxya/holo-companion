@@ -70,6 +70,41 @@ async def test_play_startup_greeting_streams_to_playback_before_listening() -> N
 
 
 @pytest.mark.anyio
+async def test_play_startup_greeting_handles_quota_exceeded_gracefully() -> None:
+    # Given
+    from holo_companion.tts.base import TtsError, TtsErrorKind, TtsProviderDiagnostic
+
+    quota_error = TtsError(
+        TtsErrorKind.PROVIDER,
+        "ElevenLabs quota exhausted",
+        TtsProviderDiagnostic(stage="http_request", error="quota_exceeded", status_code=401),
+    )
+    fake_tts = FakeTts(chunk=TTSAudioChunk.from_samples(__import__("numpy").zeros(24, dtype=__import__("numpy").float32), TtsAudioFormat(24000), 0, 0.0), fail=True)
+    fake_tts.fail = False
+
+    class QuotaTts(FakeTts):
+        async def stream(self, request, cancellation=None):
+            self.requests.append(request)
+            raise quota_error
+            yield self.chunk
+
+    tts = QuotaTts(chunk=fake_tts.chunk)
+    fake_playback = FakePlayback()
+    out = __import__("io").StringIO()
+
+    # When
+    await _play_startup_greeting(tts, fake_playback, out)
+
+    # Then
+    val = out.getvalue()
+    assert len(tts.requests) == 1
+    assert "greeting error: ElevenLabs quota exhausted" in val
+    assert "playback drain completed: False" in val
+    assert "stop/cancel/interruption reason: ElevenLabs quota exhausted" in val
+    assert len(fake_playback.admissions) == 0
+
+
+@pytest.mark.anyio
 async def test_startup_greeting_exact_text_consumes_all_generated_pcm() -> None:
     # Given
     text = "Eh, Master... udah balik ya? Aku... kangen pengen ngobrol, hehe."

@@ -144,9 +144,10 @@ def provider_error(
     close_code: int | None = None,
     message: str | None = None,
 ) -> TtsError:
+    error_msg = message if error == "quota_exceeded" and message else ("ElevenLabs quota exhausted" if error == "quota_exceeded" else "ElevenLabs TTS provider failure")
     return TtsError(
         TtsErrorKind.PROVIDER,
-        "ElevenLabs TTS provider failure",
+        error_msg,
         TtsProviderDiagnostic(stage, status_code, close_code, error, error_class, message, model),
     )
 
